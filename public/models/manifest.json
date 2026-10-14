@@ -1,7 +1,7 @@
 {
   "sofa": {
     "triangles": 2032,
-    "bytes": 71556,
+    "bytes": 734628,
     "blender_bounds_m": [
       [
         -0.655,
@@ -17,7 +17,7 @@
   },
   "ottoman": {
     "triangles": 588,
-    "bytes": 35604,
+    "bytes": 698664,
     "blender_bounds_m": [
       [
         -0.4506,
@@ -33,7 +33,7 @@
   },
   "desk": {
     "triangles": 588,
-    "bytes": 57220,
+    "bytes": 638164,
     "blender_bounds_m": [
       [
         -1.025,
@@ -49,7 +49,7 @@
   },
   "chair": {
     "triangles": 1976,
-    "bytes": 114316,
+    "bytes": 327752,
     "blender_bounds_m": [
       [
         -0.3398,
@@ -64,8 +64,8 @@
     ]
   },
   "room": {
-    "triangles": 1564,
-    "bytes": 195408,
+    "triangles": 4764,
+    "bytes": 1716184,
     "blender_bounds_m": [
       [
         -3.16,
@@ -81,7 +81,7 @@
   },
   "rug": {
     "triangles": 344,
-    "bytes": 42464,
+    "bytes": 344668,
     "blender_bounds_m": [
       [
         -2.45,
@@ -113,7 +113,7 @@
   },
   "mushroom_lamp": {
     "triangles": 500,
-    "bytes": 18568,
+    "bytes": 123900,
     "blender_bounds_m": [
       [
         -0.19,
@@ -129,7 +129,7 @@
   },
   "desk_lamp": {
     "triangles": 500,
-    "bytes": 18356,
+    "bytes": 123688,
     "blender_bounds_m": [
       [
         -0.19,
@@ -145,7 +145,7 @@
   },
   "bookshelf": {
     "triangles": 4640,
-    "bytes": 365336,
+    "bytes": 832284,
     "blender_bounds_m": [
       [
         -1.2125,
@@ -160,8 +160,8 @@
     ]
   },
   "corkboard": {
-    "triangles": 814,
-    "bytes": 88436,
+    "triangles": 886,
+    "bytes": 868688,
     "blender_bounds_m": [
       [
         -0.93,
@@ -177,7 +177,7 @@
   },
   "decor": {
     "triangles": 2416,
-    "bytes": 147992,
+    "bytes": 723756,
     "blender_bounds_m": [
       [
         -2.9725,
