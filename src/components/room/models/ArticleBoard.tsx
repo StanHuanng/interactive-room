@@ -46,7 +46,7 @@ function surfaceTexture(paper: boolean) {
 }
 
 export function ArticleBoard(props: ModelProps) {
-  const { nodes } = useGLTF('/models/corkboard.glb')
+  const { nodes } = useGLTF(`${import.meta.env.BASE_URL}models/corkboard.glb`)
   // Keep the original bevels and walnut normal map, replacing only the contents.
   const frame = nodes.Large_horizontal_noticeboard_frame as Mesh
   const { focus, returning, openFocus } = useInteraction()

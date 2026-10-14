@@ -4,19 +4,19 @@ import type { ThreeElements } from '@react-three/fiber'
 import { Mesh } from 'three'
 
 const modelPaths = {
-  sofa: '/models/sofa.glb',
-  ottoman: '/models/ottoman.glb',
-  desk: '/models/desk.glb',
-  mac: '/models/mac.glb',
-  chair: '/models/chair.glb',
-  room: '/models/room.glb',
-  rug: '/models/rug.glb',
-  side_table: '/models/side_table.glb',
-  mushroom_lamp: '/models/mushroom_lamp.glb',
-  desk_lamp: '/models/desk_lamp.glb',
-  bookshelf: '/models/bookshelf.glb',
-  corkboard: '/models/corkboard.glb',
-  decor: '/models/decor.glb',
+  sofa: `${import.meta.env.BASE_URL}models/sofa.glb`,
+  ottoman: `${import.meta.env.BASE_URL}models/ottoman.glb`,
+  desk: `${import.meta.env.BASE_URL}models/desk.glb`,
+  mac: `${import.meta.env.BASE_URL}models/mac.glb`,
+  chair: `${import.meta.env.BASE_URL}models/chair.glb`,
+  room: `${import.meta.env.BASE_URL}models/room.glb`,
+  rug: `${import.meta.env.BASE_URL}models/rug.glb`,
+  side_table: `${import.meta.env.BASE_URL}models/side_table.glb`,
+  mushroom_lamp: `${import.meta.env.BASE_URL}models/mushroom_lamp.glb`,
+  desk_lamp: `${import.meta.env.BASE_URL}models/desk_lamp.glb`,
+  bookshelf: `${import.meta.env.BASE_URL}models/bookshelf.glb`,
+  corkboard: `${import.meta.env.BASE_URL}models/corkboard.glb`,
+  decor: `${import.meta.env.BASE_URL}models/decor.glb`,
 
 } as const
 
