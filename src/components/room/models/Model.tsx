@@ -5,10 +5,19 @@ import { Mesh } from 'three'
 
 const modelPaths = {
   sofa: '/models/sofa.glb',
+  ottoman: '/models/ottoman.glb',
   desk: '/models/desk.glb',
   mac: '/models/mac.glb',
   chair: '/models/chair.glb',
   room: '/models/room.glb',
+  rug: '/models/rug.glb',
+  side_table: '/models/side_table.glb',
+  mushroom_lamp: '/models/mushroom_lamp.glb',
+  desk_lamp: '/models/desk_lamp.glb',
+  bookshelf: '/models/bookshelf.glb',
+  corkboard: '/models/corkboard.glb',
+  decor: '/models/decor.glb',
+
 } as const
 
 export type ModelProps = Omit<ThreeElements['group'], 'children' | 'dispose'>

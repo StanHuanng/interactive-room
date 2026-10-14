@@ -35,10 +35,12 @@ blender -b -P blender/build_assets.py
 blender -b -P blender/render_previews.py
 ```
 
-`public/models/` 包含 5 个原创低多边形 GLB（米、Y-up、平面着色），
-`manifest.json` 记录三角面数量与文件大小。`previews/` 包含各模型和组合场景的
-1280 × 720 Cycles CPU 预览。来源说明见 [MODELS.md](assets/licenses/MODELS.md)。
+`public/models/` 包含 13 个原创程序化 GLB（米、Y-up），`manifest.json` 记录
+三角面数量与文件大小。`previews/` 包含每个资产的 PNG 和 `combined.png`。
+来源说明见 [MODELS.md](assets/licenses/MODELS.md)，最新视觉规范见
+[SCENE_SPEC.md](docs/SCENE_SPEC.md)。现有 `mac.glb` 保持原始字节。
 
-`src/components/room/models/` 使用 `useGLTF`、预加载和 Suspense。
-`layout.ts` 保留原有家具 X/Z 坐标；6 × 5 米房间模型在网页中缩放至原有的
-10 × 10 米范围，电脑放置在 0.75 米桌面上。
+网页与 Blender 预览共享 `src/components/room/scene-layout.json` 中的家具位置，
+房间使用原生 6 × 5 × 2.8 米尺寸。点击 Walk / look 后鼠标控制视角，WASD / 方向键
+行走，靠近办公椅或沙发按 E 坐下；也可点击座椅或界面坐下按钮。
+坐下后按 E / Esc 或 Stand up 返回对应座椅旁的站立位置。

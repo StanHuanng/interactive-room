@@ -1,0 +1,106 @@
+{
+  "desk": {
+    "position": [
+      0,
+      0,
+      -1.1
+    ],
+    "rotation": 0
+  },
+  "chair": {
+    "position": [
+      0,
+      0,
+      0.03
+    ],
+    "rotation": 3.141592653589793
+  },
+  "sofa": {
+    "position": [
+      -1.65,
+      0,
+      0.72
+    ],
+    "rotation": 0.26
+  },
+  "ottoman": {
+    "position": [
+      -0.92,
+      0,
+      1.35
+    ],
+    "rotation": -0.15
+  },
+  "rug": {
+    "position": [
+      -0.12,
+      0,
+      0.2
+    ],
+    "rotation": 0
+  },
+  "side_table": {
+    "position": [
+      -2.65,
+      0,
+      1.08
+    ],
+    "rotation": 0
+  },
+  "mushroom_lamp": {
+    "position": [
+      -2.65,
+      0.515,
+      1.08
+    ],
+    "rotation": 0
+  },
+  "desk_lamp": {
+    "position": [
+      -0.72,
+      0.77,
+      -0.9
+    ],
+    "rotation": 0
+  },
+  "bookshelf": {
+    "position": [
+      -2.77,
+      0,
+      -0.55
+    ],
+    "rotation": 1.5707963267948966
+  },
+  "corkboard": {
+    "position": [
+      0,
+      1.65,
+      -2.43
+    ],
+    "rotation": 0
+  },
+  "decor": {
+    "position": [
+      0,
+      0,
+      0
+    ],
+    "rotation": 0
+  },
+  "mac": {
+    "position": [
+      0,
+      0.77,
+      -1.1
+    ],
+    "rotation": 0
+  },
+  "room": {
+    "position": [
+      0,
+      0,
+      0
+    ],
+    "rotation": 0
+  }
+}

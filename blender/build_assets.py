@@ -1,54 +1,116 @@
-"""Original low-poly furniture, in meters. Run: blender -b -P blender/build_assets.py.
-
-Blender Z-up becomes glTF Y-up. Furniture faces Blender -Y (glTF +Z).
-Every exported mesh has applied transforms and shares the floor-center origin.
+"""Original procedural study assets. Run blender -b -P blender/build_assets.py.
+Meters, Blender Z-up -> glTF Y-up; furniture faces Blender -Y / glTF +Z.
+The existing mac.glb is protected and never exported.
 """
-
+import hashlib
 import json
 import math
+import random
+import struct
+import zlib
 from pathlib import Path
 
 import bpy
 from mathutils import Vector
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT = ROOT / "public" / "models"
+OUTPUT = ROOT / 'public/models'
+
+
+def srgb(color):
+    values = [int(color.lstrip('#')[i:i + 2], 16) / 255 for i in (0, 2, 4)]
+    return tuple(v / 12.92 if v <= .04045 else ((v + .055) / 1.055) ** 2.4 for v in values)
 
 
 def clear_scene():
-    bpy.ops.object.select_all(action="SELECT")
+    bpy.ops.object.select_all(action='SELECT')
     bpy.ops.object.delete(use_global=False)
-    for collection in (bpy.data.meshes, bpy.data.materials, bpy.data.cameras, bpy.data.lights):
-        for block in list(collection):
-            if block.users == 0:
-                collection.remove(block)
 
 
-def material(name, color, roughness=0.7, metallic=0.0, emission=None):
+def normal_tile(kind):
+    """Small periodic tangent normal tile, original mathematical fiber/grain relief."""
+    name = f'{kind}_normal'
+    if name in bpy.data.images:
+        return bpy.data.images[name]
+    n = 64
+    def height(x, y):
+        u, v = 2 * math.pi * x / n, 2 * math.pi * y / n
+        if kind == 'wood':
+            return .65 * math.sin(9 * u + .4 * math.sin(v)) + .2 * math.sin(17 * u + math.sin(2 * v))
+        if kind == 'woven':
+            return .5 * math.sin(8 * u) + .5 * math.sin(8 * v) + .15 * math.sin(16 * (u + v))
+        return .45 * math.sin(7 * u + 2 * math.sin(5 * v)) + .35 * math.cos(9 * v + math.sin(3 * u)) + .2 * math.sin(13 * u + 11 * v)
+    rows = bytearray()
+    for y in range(n):
+        rows.append(0)
+        for x in range(n):
+            dx = (height(x + 1, y) - height(x - 1, y)) * .3
+            dy = (height(x, y + 1) - height(x, y - 1)) * .3
+            length = math.sqrt(dx * dx + dy * dy + 1)
+            rows.extend(round((v / length * .5 + .5) * 255) for v in (-dx, -dy, 1))
+    def chunk(tag, data):
+        return struct.pack('>I', len(data)) + tag + data + struct.pack('>I', zlib.crc32(tag + data) & 0xffffffff)
+    path = Path('/tmp') / f'study_{name}.png'
+    path.write_bytes(b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', n, n, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(bytes(rows))) + chunk(b'IEND', b''))
+    image = bpy.data.images.load(str(path))
+    image.name = name
+    image.colorspace_settings.name = 'Non-Color'
+    image.pack()
+    return image
+
+
+def material(name, color, roughness=.7, metallic=0, texture=None, emission=0):
     mat = bpy.data.materials.new(name)
-    mat.diffuse_color = (*color, 1)
+    mat.diffuse_color = (*srgb(color), 1)
     mat.use_nodes = True
-    shader = mat.node_tree.nodes.get("Principled BSDF")
-    shader.inputs["Base Color"].default_value = (*color, 1)
-    shader.inputs["Roughness"].default_value = roughness
-    shader.inputs["Metallic"].default_value = metallic
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    shader = nodes.get('Principled BSDF')
+    shader.inputs['Base Color'].default_value = mat.diffuse_color
+    shader.inputs['Roughness'].default_value = roughness
+    shader.inputs['Metallic'].default_value = metallic
     if emission:
-        shader.inputs["Emission Color"].default_value = (*emission, 1)
-        shader.inputs["Emission Strength"].default_value = 0.18
+        shader.inputs['Emission Color'].default_value = (*srgb(color), 1)
+        shader.inputs['Emission Strength'].default_value = emission
+    if texture:
+        tile = nodes.new('ShaderNodeTexImage')
+        tile.image = normal_tile(texture)
+        tile.extension = 'REPEAT'
+        normal = nodes.new('ShaderNodeNormalMap')
+        normal.name = 'Portable fiber normal'
+        normal.inputs['Strength'].default_value = .10 if 'leather' in name.lower() else (.28 if texture == 'wood' else .5)
+        links.new(tile.outputs['Color'], normal.inputs['Color'])
+        if texture == 'boucle':
+            noise = nodes.new('ShaderNodeTexNoise')
+            noise.inputs['Scale'].default_value = 185
+            noise.inputs['Detail'].default_value = 3
+            bump = nodes.new('ShaderNodeBump')
+            bump.name = 'Blender procedural boucle bump'
+            bump.inputs['Strength'].default_value = .18
+            bump.inputs['Distance'].default_value = .002
+            links.new(noise.outputs['Fac'], bump.inputs['Height'])
+            links.new(normal.outputs['Normal'], bump.inputs['Normal'])
+            links.new(bump.outputs['Normal'], shader.inputs['Normal'])
+        else:
+            links.new(normal.outputs['Normal'], shader.inputs['Normal'])
     return mat
 
 
-def finish(obj, name, mat, bevel=0):
+def finish(obj, name, mat, bevel=0, smooth=False):
     obj.name = name
     obj.data.materials.append(mat)
     bpy.ops.object.transform_apply(location=False, rotation=False, scale=True)
     if bevel:
-        mod = obj.modifiers.new("Single-facet edges", "BEVEL")
-        mod.width = bevel
-        mod.segments = 1
+        mod = obj.modifiers.new('Soft edges', 'BEVEL')
+        mod.width, mod.segments = bevel, 3 if smooth else 1
         bpy.ops.object.modifier_apply(modifier=mod.name)
     for face in obj.data.polygons:
-        face.use_smooth = False
+        face.use_smooth = smooth
+    # UV scale retains tiny fibers in GLB, instead of relying on unsupported noise nodes.
+    if obj.data.uv_layers.active:
+        repeats = 18 if 'fabric' in mat.name else 6
+        for uv in obj.data.uv_layers.active.data:
+            uv.uv.x *= repeats
+            uv.uv.y *= repeats
     return obj
 
 
@@ -61,204 +123,424 @@ def box(name, center, size, mat, bevel=0, rotation=None):
     return finish(obj, name, mat, bevel)
 
 
-def cylinder(name, center, radius, depth, mat, vertices=10, rotation=None):
-    bpy.ops.mesh.primitive_cylinder_add(vertices=vertices, radius=radius, depth=depth,
-                                       end_fill_type="NGON", location=center)
+def cylinder(name, center, radius, depth, mat, vertices=12, rotation=None):
+    bpy.ops.mesh.primitive_cylinder_add(vertices=vertices, radius=radius, depth=depth, location=center)
     obj = bpy.context.object
     if rotation:
         obj.rotation_euler = rotation
-    return finish(obj, name, mat)
+    return finish(obj, name, mat, smooth=True)
 
 
-def beam(name, start, end, width, depth, mat, bevel=0):
+def ellipsoid(name, center, size, mat, segments=24, rings=12, irregular=False):
+    bpy.ops.mesh.primitive_uv_sphere_add(segments=segments, ring_count=rings, radius=1, location=center)
+    obj = bpy.context.object
+    for vertex in obj.data.vertices:
+        if irregular:
+            angle = math.atan2(vertex.co.y, vertex.co.x)
+            vertex.co.x *= 1 + .045 * math.sin(3 * angle) + .025 * math.cos(5 * angle)
+            vertex.co.y *= 1 + .055 * math.sin(3 * angle + .7)
+    obj.scale = tuple(v / 2 for v in size)
+    return finish(obj, name, mat, smooth=True)
+
+
+def beam(name, start, end, width, depth, mat):
     direction = Vector(end) - Vector(start)
-    obj = box(name, (Vector(start) + Vector(end)) / 2,
-              (width, depth, direction.length), mat, bevel)
-    obj.rotation_euler = direction.to_track_quat("Z", "Y").to_euler()
+    obj = box(name, (Vector(start) + Vector(end)) / 2, (width, depth, direction.length), mat, .003)
+    obj.rotation_euler = direction.to_track_quat('Z', 'Y').to_euler()
     return obj
 
 
+def curved_back(name, mat, width, depth, bottom, top, thickness, steps=24, sides=10, lounge=False):
+    """Continuous horseshoe upholstered shell, rounded across its full section."""
+    verts, faces = [], []
+    start, end = (0, 180) if lounge else (15, 165)
+    for i in range(steps + 1):
+        angle = math.radians(start + (end - start) * i / steps)
+        back = max(0, math.sin(angle))
+        upper = top if not lounge else top - .17 * (1 - back)
+        zcenter, rz = (bottom + upper) / 2, (upper - bottom) / 2
+        for j in range(sides):
+            p = 2 * math.pi * j / sides
+            radial = thickness / 2 * math.cos(p)
+            y = -.37 + (depth / 2 + .37) * math.sin(angle) + radial * math.sin(angle) if lounge else (depth / 2 + radial) * math.sin(angle)
+            verts.append(((width / 2 + radial) * math.cos(angle), y, zcenter + rz * math.sin(p)))
+    if lounge:
+        # Connected rounded ends: continuous topology/normals across arm tips.
+        def cap(sign, degrees):
+            result = []
+            for deg in degrees:
+                p = math.radians(deg)
+                scale = max(.01, math.sin(p))
+                for j in range(sides):
+                    angle = 2 * math.pi * j / sides
+                    result.append((sign * (width / 2 + thickness / 2 * scale * math.cos(angle)), -.37 - thickness / 2 * math.cos(p), (bottom + top - .17) / 2 + (top - .17 - bottom) / 2 * scale * math.sin(angle)))
+            return result
+        verts = cap(1, (0, 15, 30, 45, 60, 75)) + verts + cap(-1, (75, 60, 45, 30, 15, 0))
+    intervals = len(verts) // sides - 1
+    for i in range(intervals):
+        for j in range(sides):
+            a, b = i * sides + j, i * sides + (j + 1) % sides
+            faces.append((a, b, b + sides, a + sides))
+    faces += [tuple(reversed(range(sides))), tuple(intervals * sides + j for j in range(sides))]
+    mesh = bpy.data.meshes.new(name)
+    mesh.from_pydata(verts, [], faces)
+    mesh.update()
+    obj = bpy.data.objects.new(name, mesh)
+    bpy.context.collection.objects.link(obj)
+    bpy.context.view_layer.objects.active = obj
+    obj.select_set(True)
+    # Deterministic UVs on the sweep, seamless horizontal fiber repeats.
+    uv = mesh.uv_layers.new(name='Fiber UV')
+    for polygon in mesh.polygons:
+        for loop in polygon.loop_indices:
+            index = mesh.loops[loop].vertex_index
+            uv.data[loop].uv = (index // sides / intervals * 2, index % sides / sides)
+    finish(obj, name, mat, smooth=True)
+    obj.select_set(False)
+
+
+def walnut(name='Walnut', color='#493025', roughness=.48):
+    return material(name, color, roughness, texture='wood')
+
+
+def silver():
+    return material('Brushed stainless #8C8580', '#8C8580', .35, 1)
+
+
 def sofa():
-    red = material("Sofa | garnet fabric", (0.42, 0.035, 0.045), 0.93)
-    cushion = material("Sofa | red cushions", (0.56, 0.055, 0.065), 0.95)
-    wood = material("Sofa | dark wood", (0.055, 0.026, 0.017))
-    for x in (-0.87, 0.87):
-        for y in (-0.32, 0.32):
-            box("Sofa leg", (x, y, 0.085), (0.09, 0.09, 0.17), wood, 0.008)
-    box("Sofa upholstered base", (0, 0, 0.25), (2.0, 0.86, 0.20), red, 0.035)
-    box("Sofa back frame", (0, 0.365, 0.575), (2.02, 0.17, 0.55), red, 0.04)
-    for x in (-0.95, 0.95):
-        box("Sofa armrest", (x, -0.025, 0.455), (0.20, 0.85, 0.41), red, 0.035)
-    for index, x in enumerate((-0.57, 0, 0.57), 1):
-        box(f"Seat cushion {index}", (x, -0.065, 0.385), (0.55, 0.67, 0.14), cushion, 0.025)
-        box(f"Back cushion {index}", (x, 0.25, 0.63), (0.55, 0.15, 0.40), cushion,
-            0.03, (math.radians(8), 0, 0))
+    fabric = material('Burgundy boucle fabric #632D28', '#632D28', .94, texture='boucle')
+    foot = walnut('Hidden recessed plinth', '#261A17')
+    cylinder('Hidden base', (0, 0, .03), .30, .06, foot, 24)
+    ellipsoid('Deep upholstered base', (0, -.02, .22), (1.28, 1.12, .36), fabric)
+    curved_back('Continuous curved back and arms', fabric, 1.02, .88, .18, .86, .29, sides=12, lounge=True)
+    ellipsoid('Wide low seat cushion', (0, -.16, .365), (.92, .80, .21), fabric)
+
+
+def ottoman():
+    fabric = material('Burgundy boucle fabric #632D28', '#632D28', .94, texture='boucle')
+    cylinder('Hidden ottoman base', (0, 0, .045), .25, .09, walnut('Recessed base', '#261A17'), 16)
+    ellipsoid('Irregular oval ottoman', (0, 0, .235), (.91, .70, .43), fabric, irregular=True)
 
 
 def desk():
-    walnut = material("Desk | dark walnut", (0.12, 0.054, 0.028), 0.63)
-    edge = material("Desk | walnut edge", (0.075, 0.028, 0.012), 0.72)
-    metal = material("Desk | drawer pull", (0.20, 0.21, 0.22), 0.3, 0.75)
-    box("Desk top", (0, 0, 0.715), (1.6, 0.75, 0.07), walnut, 0.012)
-    for x in (-0.69, 0.69):
-        for y in (-0.265, 0.265):
-            box("Desk leg", (x, y, 0.34), (0.065, 0.065, 0.68), edge, 0.004)
-    box("Desk rear apron", (0, 0.28, 0.62), (1.44, 0.045, 0.12), edge, 0.004)
-    for x in (-0.69, 0.69):
-        box("Desk side apron", (x, 0, 0.62), (0.045, 0.56, 0.12), edge, 0.004)
-    box("Desk drawer housing", (0.44, 0, 0.585), (0.40, 0.57, 0.18), edge, 0.008)
-    box("Desk drawer front", (0.44, -0.30, 0.585), (0.39, 0.028, 0.16), walnut, 0.005)
-    box("Desk drawer handle", (0.44, -0.325, 0.585), (0.15, 0.025, 0.018), metal, 0.004)
-
-
-def mac():
-    silver = material("Computer | aluminum", (0.56, 0.59, 0.62), 0.3, 0.78)
-    black = material("Computer | black bezel", (0.009, 0.012, 0.017), 0.3)
-    screen = material("Computer | dark luminous screen", (0.015, 0.045, 0.065),
-                      0.38, emission=(0.06, 0.16, 0.24))
-    key = material("Computer | light keys", (0.78, 0.80, 0.81), 0.5)
-    indicator = material("Computer | camera", (0.018, 0.03, 0.025), 0.35)
-    box("Computer stand foot", (0, 0.10, 0.012), (0.24, 0.20, 0.024), silver, 0.007)
-    beam("Computer stand neck", (0, 0.12, 0.024), (0, 0.17, 0.20), 0.07, 0.028, silver, 0.005)
-    box("Computer aluminum enclosure", (0, 0.16, 0.355), (0.62, 0.036, 0.395), silver, 0.012)
-    box("Computer black bezel", (0, 0.137, 0.38), (0.599, 0.010, 0.32), black, 0.004)
-    box("Computer screen", (0, 0.1305, 0.381), (0.56, 0.003, 0.285), screen)
-    cylinder("Computer webcam", (0, 0.130, 0.533), 0.003, 0.003, indicator,
-             vertices=8, rotation=(math.pi / 2, 0, 0))
-    box("Keyboard case", (-0.04, -0.225, 0.012), (0.43, 0.135, 0.024), silver, 0.006)
-    # Grouped rows imply keys without hundreds of tiny triangles.
-    for row in range(4):
-        box("Keyboard key row", (-0.04, -0.18 - row * 0.025, 0.027),
-            (0.385, 0.016, 0.006), key, 0.001)
-    box("Keyboard space bar", (-0.055, -0.279, 0.027), (0.17, 0.012, 0.006), key)
-    box("Mouse", (0.28, -0.225, 0.019), (0.061, 0.10, 0.038), key, 0.016)
-    box("Mouse touch seam", (0.28, -0.24, 0.0385), (0.0015, 0.037, 0.001), silver)
+    wood, metal = walnut('Desk walnut #493025'), silver()
+    box('Thin flat walnut desktop', (0, 0, .745), (2.05, .88, .05), wood, .004)
+    for x in (-.88, .88):
+        box('Wide brushed stainless slab leg', (x, 0, .36), (.085, .72, .72), metal, .005)
+    # Sparse original desktop accessories, leaving the center clear for the protected Mac.
+    colors = ['#CEBEA5', '#75513B', '#797773']
+    for side, x in enumerate((-.70, .65)):
+        for i in range(3):
+            book = material(f'Desk book {side} {i}', colors[i], .84)
+            box('Horizontal book', (x, .17, .787 + i * .035), (.27 - .02 * i, .18, .03), book, .002)
+    box('Small walnut tray', (.70, -.24, .78), (.24, .15, .02), wood, .006)
+    ceramic = material('Matte ceramic', '#C8AF91', .82)
+    cylinder('Ceramic bowl', (.70, -.24, .81), .055, .04, ceramic)
+    cylinder('Pen cup', (.87, .27, .835), .04, .13, ceramic)
+    for i in range(3):
+        cylinder('Pencil', (.85 + i * .014, .27, .915), .004, .13, wood, 6)
 
 
 def chair():
-    black = material("Chair | charcoal upholstery", (0.025, 0.03, 0.035), 0.9)
-    frame = material("Chair | black frame", (0.012, 0.015, 0.019), 0.5)
-    steel = material("Chair | gas lift steel", (0.30, 0.32, 0.34), 0.3, 0.8)
-    cylinder("Chair base hub", (0, 0, 0.125), 0.075, 0.085, frame)
-    for index in range(5):
-        angle = 2 * math.pi * index / 5 + math.pi / 2
-        dx, dy = math.cos(angle), math.sin(angle)
-        beam("Chair base spoke", (0.035 * dx, 0.035 * dy, 0.14),
-             (0.29 * dx, 0.29 * dy, 0.095), 0.055, 0.035, frame, 0.004)
-        # Wheel axle is horizontal and tangent to each spoke.
-        for offset in (-0.017, 0.017):
-            wheel = cylinder("Chair caster", (0.30 * dx - offset * dy,
-                                                0.30 * dy + offset * dx, 0.04),
-                             0.04, 0.024, frame, vertices=8)
-            wheel.rotation_euler = Vector((-dy, dx, 0)).to_track_quat("Z", "Y").to_euler()
-        box("Chair caster fork", (0.30 * dx, 0.30 * dy, 0.079),
-            (0.036, 0.036, 0.042), frame, 0.004)
-    cylinder("Chair gas lift sleeve", (0, 0, 0.22), 0.040, 0.19, frame)
-    cylinder("Chair gas lift piston", (0, 0, 0.365), 0.024, 0.18, steel)
-    box("Chair seat pan", (0, 0, 0.44), (0.49, 0.46, 0.05), frame, 0.02)
-    box("Chair seat cushion", (0, -0.02, 0.485), (0.50, 0.47, 0.08), black, 0.03)
-    beam("Chair back support", (0, 0.18, 0.43), (0, 0.25, 0.85), 0.07, 0.035, frame, 0.005)
-    box("Chair back shell", (0, 0.245, 0.775), (0.45, 0.075, 0.46), frame,
-        0.025, (math.radians(-8), 0, 0))
-    box("Chair back cushion", (0, 0.20, 0.775), (0.42, 0.08, 0.42), black,
-        0.025, (math.radians(-8), 0, 0))
-    for x in (-0.29, 0.29):
-        beam("Chair arm support", (x, 0.06, 0.46), (x, 0.06, 0.66), 0.03, 0.045, frame)
-        box("Chair armrest", (x, 0, 0.675), (0.075, 0.33, 0.045), black, 0.012)
+    leather = material('Brown leather', '#67422F', .62, texture='boucle')
+    frame, rubber = silver(), material('Caster rubber', '#24211F', .88)
+    cylinder('Silver base hub', (0, 0, .125), .075, .085, frame)
+    for i in range(5):
+        a = 2 * math.pi * i / 5 + math.pi / 2
+        dx, dy = math.cos(a), math.sin(a)
+        beam('Five star silver spoke', (.035 * dx, .035 * dy, .14), (.30 * dx, .30 * dy, .09), .05, .03, frame)
+        for offset in (-.017, .017):
+            wheel = cylinder('Caster wheel', (.31 * dx - offset * dy, .31 * dy + offset * dx, .04), .04, .023, rubber, 10)
+            wheel.rotation_euler = Vector((-dy, dx, 0)).to_track_quat('Z', 'Y').to_euler()
+        cylinder('Caster swivel', (.31 * dx, .31 * dy, .085), .02, .04, frame)
+    cylinder('Silver gas lift', (0, 0, .30), .03, .34, frame)
+    ellipsoid('Leather seat cushion', (0, -.03, .48), (.56, .53, .13), leather, 20, 10)
+    beam('Silver back support', (0, .18, .43), (0, .25, .72), .05, .025, frame)
+    curved_back('Low curved leather back', leather, .49, .40, .51, .88, .10, steps=16, sides=8)
+    for x in (-.30, .30):
+        beam('Silver arm upright', (x, .08, .46), (x, .08, .67), .025, .035, frame)
+        beam('Silver armrest', (x, -.19, .66), (x, .18, .66), .055, .035, frame)
+        ellipsoid('Leather arm pad', (x, -.01, .685), (.067, .30, .045), leather, 12, 6)
 
 
-def join_parts(name, parts):
-    bpy.ops.object.select_all(action="DESELECT")
-    for obj in parts:
-        obj.select_set(True)
-    bpy.context.view_layer.objects.active = parts[0]
-    bpy.ops.object.join()
-    parts[0].name = name
-    return parts[0]
+def artwork(x, y, z, width, height, frame, rotation=0):
+    paper = material('Original abstract canvas', '#D5C1A3', .93)
+    dark = material('Abstract brown-black shapes', '#372821', .95)
+    box('Narrow artwork frame', (x, y, z), (width, .045, height), frame, .004, (0, 0, rotation))
+    box('Abstract painting background', (x, y - .028, z), (width - .045, .008, height - .045), paper)
+    box('Abstract geometric block', (x - width * .16, y - .035, z + height * .15), (width * .40, .005, height * .28), dark)
+    box('Abstract geometric block', (x + width * .14, y - .035, z - height * .16), (width * .30, .005, height * .38), dark)
 
 
 def room():
-    beige = material("Room | warm beige plaster", (0.68, 0.58, 0.45), 0.95)
-    trim = material("Room | cream baseboards", (0.82, 0.75, 0.62), 0.7)
-    timber = [material(f"Room | oak plank {i}", color, 0.8) for i, color in enumerate(
-        ((0.38, 0.22, 0.105), (0.44, 0.27, 0.13), (0.48, 0.30, 0.15),
-         (0.41, 0.24, 0.11), (0.46, 0.28, 0.14)))]
-    subfloor = material("Room | plank seams", (0.13, 0.074, 0.033), 0.9)
-    box("Floor foundation", (0, 0, -0.071), (6, 5, 0.098), subfloor)
-    planks = []
+    beige = material('Warm beige walls #B99475', '#B99475', .95)
+    trim = walnut('Dark walnut trim', '#302018', .63)
+    floor = [walnut(f'Walnut floor plank {i}', color, .48) for i, color in enumerate(('#543020', '#573323', '#502E1F', '#593524', '#513022', '#563121'))]
+    seam = material('Dark plank seams', '#291B16', .9)
+    box('Floor foundation', (0, 0, -.055), (6, 5, .08), seam)
     for row in range(20):
-        # Stagger the joints, with clipped end planks at the room boundary.
-        edges = [-3] + [x + (0.6 if row % 2 else 0) for x in (-1.8, -0.6, 0.6, 1.8)] + [3]
+        edges = [-3] + [x + (.55 if row % 2 else 0) for x in (-1.8, -.6, .6, 1.8)] + [3]
         for col, (left, right) in enumerate(zip(edges, edges[1:])):
-            planks.append(box("Oak plank", ((left + right) / 2, -2.375 + row * 0.25, -0.011),
-                              (right - left - 0.003, 0.247, 0.022), timber[(row * 3 + col) % 5]))
-    join_parts("Floor oak planks", planks)
-    # Wall inner faces sit exactly at the 6 x 5 m room boundary.
-    box("Wall back", (0, 2.58, 1.4), (6.32, 0.16, 2.8), beige)
-    box("Wall front", (0, -2.58, 1.4), (6.32, 0.16, 2.8), beige)
-    box("Wall right", (3.08, 0, 1.4), (0.16, 5, 2.8), beige)
-    # One joined mesh around a real 1.8 x 1.2 m opening; no transparent wall.
-    pieces = [
-        box("Window wall lower", (-3.08, 0, 0.5), (0.16, 5, 1.0), beige),
-        box("Window wall upper", (-3.08, 0, 2.5), (0.16, 5, 0.6), beige),
-        box("Window wall side", (-3.08, -1.7, 1.6), (0.16, 1.6, 1.2), beige),
-        box("Window wall side", (-3.08, 1.7, 1.6), (0.16, 1.6, 1.2), beige),
-    ]
-    join_parts("Wall left window opening", pieces)
-    for y in (-2.49, 2.49):
-        box("Baseboard front" if y < 0 else "Baseboard back", (0, y, 0.055), (6, 0.035, 0.11), trim)
-    for x in (-2.99, 2.99):
-        box("Baseboard left" if x < 0 else "Baseboard right", (x, 0, 0.055), (0.035, 5, 0.11), trim)
-    box("Window sill", (-3.035, 0, 1.005), (0.30, 1.94, 0.07), trim, 0.006)
-    for y in (-0.925, 0.925):
-        box("Window upright", (-3.0, y, 1.62), (0.08, 0.065, 1.23), trim, 0.003)
-    box("Window lintel trim", (-3.0, 0, 2.215), (0.08, 1.92, 0.065), trim, 0.003)
-    box("Window mullion", (-3.045, 0, 1.6), (0.055, 0.035, 1.18), trim)
+            obj = box('Walnut plank', ((left + right) / 2, -2.375 + row * .25, -.01), (right - left - .003, .247, .02), floor[(row * 3 + col) % 6])
+            # Stretch grain along the long plank, while avoiding identical repeats.
+            for uv in obj.data.uv_layers.active.data:
+                uv.uv.y *= .25
+                uv.uv.x += row * .137 + col * .23
+    box('Wall back', (0, 2.58, 1.4), (6.32, .16, 2.8), beige)
+    box('Wall front', (0, -2.58, 1.4), (6.32, .16, 2.8), beige)
+    box('Wall left', (-3.08, 0, 1.4), (.16, 5, 2.8), beige)
+    # Window on the right, toward the foreground; door toward the back.
+    for center, size in [((3.08, 0, .50), (.16, 5, 1)), ((3.08, 0, 2.52), (.16, 5, .56)), ((3.08, -1.825, 1.62), (.16, 1.35, 1.24)), ((3.08, 1.575, 1.62), (.16, 1.85, 1.24))]:
+        box('Right wall around window', center, size, beige)
+    box('Plain warm ceiling', (0, 0, 2.87), (6.32, 5.32, .14), material('Ceiling light beige', '#CFB89B', .95))
+    for y in (-2.48, 2.48):
+        box('Dark baseboard', (0, y, .06), (6, .04, .12), trim)
+    for x in (-2.98, 2.98):
+        box('Dark baseboard', (x, 0, .06), (.04, 5, .12), trim)
+    for y in (-1.15, .65):
+        box('Window upright', (2.99, y, 1.62), (.09, .065, 1.30), trim)
+    for z in (1, 2.24):
+        box('Window horizontal trim', (2.99, -.25, z), (.09, 1.88, .065), trim)
+    box('Window mullion', (3.015, -.25, 1.62), (.04, .035, 1.20), trim)
+    box('Window sill', (2.96, -.25, 1.01), (.24, 1.94, .05), trim)
+    glass = material('Window soft blue glass', '#849693', .22, .1)
+    shader = glass.node_tree.nodes.get('Principled BSDF')
+    shader.inputs['Transmission Weight'].default_value = .65
+    box('Window glazing', (3.04, -.25, 1.62), (.012, 1.74, 1.16), glass)
+    door = walnut('Right wall walnut door', '#493025')
+    box('Walnut single door', (2.975, 1.78, 1.05), (.06, .94, 2.10), door, .004)
+    for y in (1.28, 2.28):
+        box('Door casing', (2.94, y, 1.09), (.085, .055, 2.18), trim)
+    box('Door casing top', (2.94, 1.78, 2.16), (.085, 1.05, .06), trim)
+    box('Simple metal door handle', (2.91, 1.47, 1.01), (.08, .12, .024), silver(), .005)
 
 
-BUILDERS = {"sofa": sofa, "desk": desk, "mac": mac, "chair": chair, "room": room}
+def rug():
+    fabric = material('Light brown woven rug fabric', '#B79C79', .98, texture='woven')
+    stripe = material('Subtle linen stripe fabric', '#BDA380', .98, texture='woven')
+    box('Large thin woven rug', (0, 0, .008), (4.90, 3.05, .016), fabric, .008)
+    for i in range(25):
+        box('Fine parallel woven stripe', (-2.34 + i * .195, 0, .0165), (.015, 2.99, .001), stripe)
+
+
+def side_table():
+    metal = material('Side table aged champagne metal', '#99836C', .42, 1)
+    cylinder('Side table round top', (0, 0, .50), .24, .025, metal, 24)
+    cylinder('Side table pedestal', (0, 0, .255), .028, .48, metal)
+    cylinder('Side table foot', (0, 0, .018), .18, .036, metal, 20)
+
+
+def lamp(tall=False, brass_shade=False):
+    brass = material('Warm brushed brass', '#AF8E55', .35, 1)
+    shade = brass if brass_shade else material('Milk glass warm mushroom shade', '#E5D6B8', .65)
+    glow = material('Warm 2700K lamp diffuser', '#FFCE8B', .75, emission=2.5)
+    height = 1.48 if tall else .36
+    radius = .27 if tall else .19
+    cylinder('Mushroom lamp foot', (0, 0, .016), radius * .62, .032, brass, 20)
+    cylinder('Mushroom brass column', (0, 0, height * .43), .022, height * .86, brass)
+    # Upper hemisphere with a flat underside: no sphere masquerading as a mushroom.
+    verts, faces = [], []
+    rings, segments = 6, 24
+    for i in range(rings + 1):
+        angle = math.pi / 2 * i / rings
+        for j in range(segments):
+            a = 2 * math.pi * j / segments
+            verts.append((radius * math.cos(angle) * math.cos(a), radius * math.cos(angle) * math.sin(a), height * .83 + radius * .63 * math.sin(angle)))
+    for i in range(rings):
+        for j in range(segments):
+            a = i * segments + j
+            b = i * segments + (j + 1) % segments
+            faces.append((a, b, b + segments, a + segments))
+    mesh = bpy.data.meshes.new('Hemisphere shade')
+    mesh.from_pydata(verts, [], faces)
+    mesh.update()
+    obj = bpy.data.objects.new('Mushroom hemisphere shade', mesh)
+    bpy.context.collection.objects.link(obj)
+    finish(obj, obj.name, shade, smooth=True)
+    cylinder('Warm luminous underside', (0, 0, height * .83), radius * .96, .012, glow, 24)
+
+
+def mushroom_lamp():
+    lamp()
+
+
+def desk_lamp():
+    lamp(brass_shade=True)
+
+
+def bookshelf():
+    wood = walnut('Deep walnut bookshelf', '#35241C', .57)
+    led = material('2700K shelf LED', '#FFCE8B', .65, emission=3)
+    box('Bookshelf rear panel', (0, .16, 1.25), (2.40, .04, 2.5), wood)
+    for x in (-1.19, -.39, .39, 1.19):
+        box('Bookshelf vertical divider', (x, 0, 1.25), (.045, .36, 2.50), wood)
+    for z in (.08, .53, 1.02, 1.54, 2.03, 2.49):
+        box('Bookshelf shelf', (0, 0, z), (2.42, .38, .045), wood)
+        if z > .1:
+            box('Downward warm LED strip', (0, -.10, z - .028), (2.28, .018, .009), led)
+    bookmats = [material(f'Original book cover {i}', color, .9) for i, color in enumerate(('#9A7254', '#C9B99B', '#695746', '#4C5751', '#B0997D'))]
+    rng = random.Random(42)
+    for shelf, z in enumerate((.11, .56, 1.05, 1.57, 2.06)):
+        for col in range(3):
+            for i in range(4 if (col + shelf) % 2 else 6):
+                h = rng.uniform(.20, .33)
+                x = -.99 + col * .79 + i * .068
+                box('Book spine', (x, -.018, z + h / 2), (.052, .22, h), bookmats[(shelf + col + i) % 5], .002)
+    ceramic = material('Shelf ceramic sand', '#BEA68B', .9)
+    for x, z in ((-.10, .64), (.71, 1.13), (-.85, 1.65)):
+        ellipsoid('Original ceramic vessel', (x, -.015, z + .10), (.16, .14, .20), ceramic, 12, 8)
+
+
+    # Small framed landscape, abstract bronze sculpture, and shelf greenery.
+    paper = material('Original shelf picture', '#C6B697', .94)
+    hills = material('Original shelf landscape', '#737B62', .95)
+    box('Small shelf picture frame', (.23, -.018, .25), (.22, .035, .27), wood, .003)
+    box('Original shelf picture canvas', (.23, -.039, .25), (.19, .004, .24), paper)
+    box('Original landscape hill', (.23, -.043, .21), (.18, .003, .09), hills)
+    bronze = material('Original bronze sculpture', '#977C50', .48, 1)
+    box('Sculpture base', (.23, -.015, 1.075), (.16, .11, .035), wood, .003)
+    bpy.ops.mesh.primitive_torus_add(major_segments=12, minor_segments=6, major_radius=.064,
+        minor_radius=.016, location=(.23, -.015, 1.175), rotation=(math.pi / 2, 0, 0))
+    finish(bpy.context.object, 'Abstract bronze ring sculpture', bronze, smooth=True)
+    cylinder('Small shelf plant pot', (1.08, -.015, 2.115), .055, .11, ceramic, 12)
+    for i in range(3):
+        angle = 2 * math.pi * i / 3
+        obj = ellipsoid('Shelf plant leaf', (1.08 + .025 * math.cos(angle), -.015 + .025 * math.sin(angle), 2.22),
+            (.12, .045, .022), hills, 10, 6)
+        obj.rotation_euler = (0, -.65, angle)
+
+
+def corkboard():
+    cork = material('Natural granular cork', '#A58157', .97, texture='boucle')
+    frame = walnut('Corkboard dark wood frame', '#38251C')
+    box('Large horizontal noticeboard frame', (0, 0, 0), (1.86, .065, .93), frame, .007)
+    box('Cork surface', (0, -.037, 0), (1.78, .015, .85), cork)
+    paper = material('Vintage map parchment', '#CCB58B', .98)
+    ink = material('Original map lines', '#866F4B', .98)
+    box('Original vintage style map', (-.30, -.05, .045), (.88, .004, .61), paper)
+    # Original schematic contour-map linework, no external artwork.
+    for i in range(9):
+        beam('Map route line', (-.68 + i * .09, -.054, -.18), (-.59 + i * .08, -.054, .30), .003, .003, ink)
+    for i in range(6):
+        box('Map latitude line', (-.30, -.055, -.16 + i * .09), (.78, .003, .002), ink)
+    land = material('Original vintage map landmasses', '#A08B62', .98)
+    for shape in [((- .44, .35), (-.18, .40), (-.08, .22), (-.19, .03), (-.12, -.12), (-.23, -.40), (-.32, -.17), (-.28, .02), (-.42, .13)),
+                  ((.03, .30), (.33, .38), (.44, .19), (.26, .09), (.37, -.07), (.27, -.30), (.12, -.16), (.07, .02), (-.03, .14))]:
+        mesh = bpy.data.meshes.new('Original map contour')
+        mesh.from_pydata([(-.30 + x * .78, -.058, .045 + z * .58) for x, z in shape], [], [tuple(range(len(shape)))])
+        mesh.update()
+        obj = bpy.data.objects.new('Original map continent silhouette', mesh)
+        bpy.context.collection.objects.link(obj)
+        finish(obj, obj.name, land)
+    mats = [material(f'Pinned photo or note {i}', color, .96) for i, color in enumerate(('#DDD0B5', '#76816E', '#907256', '#B9A084'))]
+    for i, (x, z, w, h) in enumerate(((.42, .22, .31, .20), (.56, -.07, .26, .18), (.22, -.26, .17, .13), (-.69, -.31, .16, .11))):
+        box('Pinned paper', (x, -.051, z), (w, .004, h), mats[i], rotation=(0, math.radians((-1) ** i * 5), 0))
+        if i < 2:
+            box('Original landscape photo horizon', (x, -.055, z - .04), (w * .9, .002, h * .34), mats[2])
+        ellipsoid('Brass pin', (x, -.058, z + h * .4), (.014, .007, .014), silver(), 8, 4)
+
+
+def decor():
+    """Fixed spec decorations in room-local coordinates, exported as one inexpensive asset."""
+    wood = walnut('Decor dark walnut', '#38251C')
+    brass = material('Decor warm brass', '#AF8E55', .38, 1)
+    box('Low cabinet', (.05, 2.24, .32), (1.85, .40, .60), wood, .007)
+    for x in (-.4, .49):
+        box('Cabinet door', (x, 2.025, .32), (.86, .018, .54), wood, .003)
+        box('Cabinet pull', (x + .25, 2.005, .40), (.10, .02, .014), brass)
+    artwork(-1.35, 2.465, 1.74, .43, .83, wood)
+    # Build right-wall painting facing inward by transforming its meshes.
+    before = set(bpy.context.scene.objects)
+    artwork(0, 0, 1.74, .43, .83, wood)
+    for obj in set(bpy.context.scene.objects) - before:
+        x, y = obj.location.x, obj.location.y
+        obj.location.x, obj.location.y = 2.95 + y, .92 - x
+        obj.rotation_euler.z = -math.pi / 2
+    # Narrow right-side shelf.
+    for z in (.15, .62, 1.08, 1.55, 1.99):
+        box('Narrow right shelf', (2.76, -1.75, z), (.36, .64, .035), wood)
+    for y in (-2.06, -1.44):
+        box('Narrow shelf upright', (2.76, y, 1.06), (.36, .035, 1.92), wood)
+    ceramic = material('Decor ceramic', '#B89E7D', .9)
+    for z in (.69, 1.15, 1.62):
+        ellipsoid('Shelf pot', (2.73, -1.73, z + .07), (.14, .14, .17), ceramic, 12, 6)
+    # Right floor lamp, matching mushroom silhouette.
+    before = set(bpy.context.scene.objects)
+    lamp(tall=True)
+    for obj in set(bpy.context.scene.objects) - before:
+        obj.location += Vector((2.29, -.89, 0))
+    pot = material('Plant earthenware', '#786048', .9)
+    leaf = material('Muted foliage', '#46513B', .88)
+    cylinder('Plant pot', (2.50, -.02, .16), .15, .32, pot, 16)
+    for i in range(7):
+        a = i * 2.4
+        start = (2.50, -.02, .25)
+        end = (2.50 + .20 * math.cos(a), -.02 + .20 * math.sin(a), .58 + .06 * (i % 3))
+        beam('Plant stem', start, end, .009, .009, leaf)
+        obj = ellipsoid('Plant leaf', end, (.22, .08, .025), leaf, 10, 6)
+        obj.rotation_euler = (0, -.35, a)
+    glow = material('Vertical wall lamp warm white', '#FFDBA2', .7, emission=2)
+    box('Left wall brass sconce', (-2.94, 1.81, 1.65), (.065, .13, .66), brass, .008)
+    box('Left wall sconce diffuser', (-2.90, 1.81, 1.65), (.025, .085, .59), glow, .007)
+
+
+BUILDERS = {'sofa': sofa, 'ottoman': ottoman, 'desk': desk, 'chair': chair, 'room': room,
+            'rug': rug, 'side_table': side_table, 'mushroom_lamp': mushroom_lamp,
+            'desk_lamp': desk_lamp, 'bookshelf': bookshelf, 'corkboard': corkboard, 'decor': decor}
 
 
 def build_asset(name, builder):
     clear_scene()
     scene = bpy.context.scene
-    scene.unit_settings.system = "METRIC"
-    scene.unit_settings.scale_length = 1.0
+    scene.unit_settings.system = 'METRIC'
     builder()
-    meshes = [obj for obj in scene.objects if obj.type == "MESH"]
-    triangle_count = 0
-    bpy.ops.object.select_all(action="DESELECT")
+    meshes = [obj for obj in scene.objects if obj.type == 'MESH']
+    triangles = 0
+    bpy.ops.object.select_all(action='DESELECT')
     for obj in meshes:
         bpy.context.view_layer.objects.active = obj
         obj.select_set(True)
         bpy.ops.object.transform_apply(location=True, rotation=True, scale=True)
         obj.select_set(False)
         obj.data.calc_loop_triangles()
-        triangle_count += len(obj.data.loop_triangles)
-    if triangle_count >= 3000:
-        raise RuntimeError(f"{name}: exceeds triangle budget ({triangle_count})")
+        triangles += len(obj.data.loop_triangles)
+    if triangles > 6000:
+        raise RuntimeError(f'{name}: exceeds 6000 triangle budget ({triangles})')
     root = bpy.data.objects.new(name, None)
     scene.collection.objects.link(root)
-    root["units"] = "meters"
-    root["origin"] = "floor surface center"
+    root['units'] = 'meters'
     for obj in meshes:
         obj.parent = root
-    bpy.ops.object.select_all(action="SELECT")
-    path = OUTPUT / f"{name}.glb"
-    bpy.ops.export_scene.gltf(filepath=str(path), export_format="GLB", use_selection=True,
-                              export_yup=True, export_apply=True, export_normals=True,
-                              export_texcoords=False, export_materials="EXPORT",
-                              export_cameras=False, export_lights=False, export_extras=True)
-    corners = [obj.matrix_world @ Vector(corner) for obj in meshes for corner in obj.bound_box]
-    bounds = [[round(min(v[i] for v in corners), 4) for i in range(3)],
-              [round(max(v[i] for v in corners), 4) for i in range(3)]]
-    result = {"triangles": triangle_count, "bytes": path.stat().st_size,
-              "blender_bounds_m": bounds}
-    print(f"ASSET {name}: {triangle_count} triangles | {result['bytes']} bytes | {path}", flush=True)
-    return result
+    # Blender keeps procedural boucle bump; GLB uses the packed periodic normal tile.
+    restored = []
+    for mat in {slot.material for obj in meshes for slot in obj.material_slots}:
+        nodes, links = mat.node_tree.nodes, mat.node_tree.links
+        bump = nodes.get('Blender procedural boucle bump')
+        if bump:
+            shader, normal = nodes.get('Principled BSDF'), nodes.get('Portable fiber normal')
+            links.new(normal.outputs['Normal'], shader.inputs['Normal'])
+            restored.append((mat, bump, shader))
+    bpy.ops.object.select_all(action='SELECT')
+    path = OUTPUT / f'{name}.glb'
+    bpy.ops.export_scene.gltf(filepath=str(path), export_format='GLB', use_selection=True,
+        export_yup=True, export_apply=True, export_normals=True, export_texcoords=True,
+        export_materials='EXPORT', export_cameras=False, export_lights=False, export_extras=True)
+    for mat, bump, shader in restored:
+        mat.node_tree.links.new(bump.outputs['Normal'], shader.inputs['Normal'])
+    corners = [obj.matrix_world @ Vector(v) for obj in meshes for v in obj.bound_box]
+    report = {'triangles': triangles, 'bytes': path.stat().st_size,
+              'blender_bounds_m': [[round(min(v[i] for v in corners), 4) for i in range(3)], [round(max(v[i] for v in corners), 4) for i in range(3)]]}
+    print(f"ASSET {name}: {triangles} triangles | {report['bytes']} bytes", flush=True)
+    return report
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     OUTPUT.mkdir(parents=True, exist_ok=True)
+    mac_path = OUTPUT / 'mac.glb'
+    mac_hash = hashlib.sha256(mac_path.read_bytes()).hexdigest()
+    mac_report = json.loads((OUTPUT / 'manifest.json').read_text())['mac']
     report = {name: build_asset(name, builder) for name, builder in BUILDERS.items()}
-    (OUTPUT / "manifest.json").write_text(json.dumps(report, indent=2) + "\n")
+    assert hashlib.sha256(mac_path.read_bytes()).hexdigest() == mac_hash, 'Protected Mac changed'
+    report['mac'] = mac_report
+    print(f"ASSET mac: {mac_report['triangles']} triangles | {mac_path.stat().st_size} bytes | PRESERVED sha256={mac_hash}", flush=True)
+    (OUTPUT / 'manifest.json').write_text(json.dumps(report, indent=2) + '\n')
