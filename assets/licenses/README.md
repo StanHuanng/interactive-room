@@ -8,4 +8,4 @@
 - 作者署名要求
 - 引入日期
 
-当前 stub 仅使用 Three.js 程序化几何，无外部 3D 资产。
+当前模型由 Blender 脚本原创程序化生成，无第三方 3D 资产。详见 [MODELS.md](./MODELS.md)。
